@@ -60,7 +60,7 @@ def train():
                 100. * batch_idx / len(color_data.train_loader), loss.item()))
 
 test_loader = torch.utils.data.DataLoader(
-        datasets.MNIST('./mnist_data', train=False, transform=transforms.ToTensor()),
+        datasets.MNIST('/work/scratch/wittmann/torchvisiondata', train=False, transform=transforms.ToTensor()),
         batch_size=c.batch_size, shuffle=True, drop_last=True)
 
 def test():

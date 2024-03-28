@@ -4,7 +4,7 @@
 
 # Train to colorize the 'colorized mnist' images,
 # instead of conditional generation
-colorize = False
+colorize = True
 
 #########
 # Data: #
@@ -13,9 +13,8 @@ colorize = False
 data_mean = 0.0
 data_std  = 1.0
 img_dims = (28, 28)
-output_dim = img_dims[0] * img_dims[1]
-if colorize:
-    output_dim *= 3
+cond_output_dim = img_dims[0] * img_dims[1]
+col_output_dim = cond_output_dim * 3
 
 add_image_noise = 0.15
 
@@ -43,16 +42,16 @@ pre_low_lr = 1
 #################
 
 # For cond. generation:
-n_blocks = 24
-internal_width = 512
-clamping   = 1.5
+cond_n_blocks = 24
+cond_internal_width = 512
+cond_clamping   = 1.5
 
 # For colorization:
-#n_blocks = 7
-#n_blocks_conv = 3
-#internal_width = 256
-#internal_width_conv = 64
-#clamping = 1.9
+col_n_blocks = 7
+col_n_blocks_conv = 3
+col_internal_width = 256
+col_internal_width_conv = 64
+col_clamping = 1.9
 cond_width = 64                             # Output size of conditioning network
 
 fc_dropout = 0.0

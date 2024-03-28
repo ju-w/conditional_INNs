@@ -97,26 +97,26 @@ transf =      T.Compose([T.RandomHorizontalFlip(),
 transf_test = T.Compose([T.Resize(c.img_dims_orig[0]),
                          T.CenterCrop(c.img_dims_orig[0])])
 
-if c.dataset == 'imagenet':
-    with open('./imagenet/training_images.txt') as f:
-        train_list = [join('./imagenet', fname[2:]) for fname in f.read().splitlines()]
-    with open(c.validation_images) as f:
-        test_list = [ t for t in f.read().splitlines()if t[0] != '#']
-        test_list = [join('./imagenet', fname) for fname in test_list]
-        if c.val_start is not None:
-            test_list = test_list[c.val_start:c.val_stop]
-else:
-    data_dir = '/home/diz/data/coco17'
-    complete_list = sorted(glob.glob(join(data_dir, '*.jpg')))
-    train_list = complete_list[64:]
-    test_list = complete_list[64:]
+# if c.dataset == 'imagenet':
+#     with open('./imagenet/training_images.txt') as f:
+#         train_list = [join('./imagenet', fname[2:]) for fname in f.read().splitlines()]
+#     with open(c.validation_images) as f:
+#         test_list = [ t for t in f.read().splitlines()if t[0] != '#']
+#         test_list = [join('./imagenet', fname) for fname in test_list]
+#         if c.val_start is not None:
+#             test_list = test_list[c.val_start:c.val_stop]
+# else:
+#     data_dir = '/home/diz/data/coco17'
+#     complete_list = sorted(glob.glob(join(data_dir, '*.jpg')))
+#     train_list = complete_list[64:]
+#     test_list = complete_list[64:]
 
 
-train_data = LabColorDataset(train_list,transf)
-test_data  = LabColorDataset(test_list, transf_test)
+# train_data = LabColorDataset(train_list,transf)
+# test_data  = LabColorDataset(test_list, transf_test)
 
-train_loader = DataLoader(train_data, batch_size=c.batch_size, shuffle=True, num_workers=8, pin_memory=True, drop_last=True)
-test_loader = DataLoader(test_data,  batch_size=min(64, len(test_list)), shuffle=c.shuffle_val, num_workers=4, pin_memory=True, drop_last=False)
+# train_loader = DataLoader(train_data, batch_size=c.batch_size, shuffle=True, num_workers=8, pin_memory=True, drop_last=True)
+# test_loader = DataLoader(test_data,  batch_size=min(64, len(test_list)), shuffle=c.shuffle_val, num_workers=4, pin_memory=True, drop_last=False)
 
 if __name__ == '__main__':
     # Determine mean and standard deviation of RGB channels

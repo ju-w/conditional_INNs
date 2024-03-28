@@ -98,8 +98,8 @@ class ColorizationCINN(nn.Module):
             nodes.append(Ff.Node(nodes[-1], Fm.PermuteRandom, {'seed':k}))
 
         #split off 6/8 ch
-        nodes.append(Ff.Node(nodes[-1], Fm.Split1D,
-                             {'split_size_or_sections':[2,6], 'dim':0}))
+        nodes.append(Ff.Node(nodes[-1], Fm.Split,
+                             {'section_sizes':[2,6], 'dim':0}))
         split_nodes.append(Ff.Node(nodes[-1].out1, Fm.Flatten, {}))
 
         nodes.append(Ff.Node(nodes[-1], Fm.HaarDownsampling, {'rebalance':0.5}))
@@ -113,8 +113,8 @@ class ColorizationCINN(nn.Module):
             nodes.append(Ff.Node(nodes[-1], Fm.PermuteRandom, {'seed':k}))
 
         #split off 4/8 ch
-        nodes.append(Ff.Node(nodes[-1], Fm.Split1D,
-                             {'split_size_or_sections':[4,4], 'dim':0}))
+        nodes.append(Ff.Node(nodes[-1], Fm.Split,
+                             {'section_sizes':[4,4], 'dim':0}))
         split_nodes.append(Ff.Node(nodes[-1].out1, Fm.Flatten, {}))
         nodes.append(Ff.Node(nodes[-1], Fm.Flatten, {}, name='flatten'))
 
@@ -131,11 +131,11 @@ class ColorizationCINN(nn.Module):
                              Fm.Concat1d, {'dim':0}))
         nodes.append(Ff.OutputNode(nodes[-1]))
 
-        return Ff.ReversibleGraphNet(nodes + split_nodes + conditions, verbose=False)
+        return Ff.GraphINN(nodes + split_nodes + conditions, verbose=False)
 
     def forward(self, Lab):
-        z = self.cinn(Lab[:,1:], c=self.cond_net(Lab[:,:1]))
-        jac = self.cinn.log_jacobian(run_forward=False)
+        z, jac = self.cinn(Lab[:,1:], c=self.cond_net(Lab[:,:1]))
+        # jac = self.cinn.log_jacobian(run_forward=False)
         return z, jac
 
     def reverse_sample(self, z, L):

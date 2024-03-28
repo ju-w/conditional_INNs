@@ -14,7 +14,7 @@ clamping = 1.5
 
 seed = 9287
 batch_size = 48
-device_ids = [0,1,2]                # GPU ids. Set to [0] for single GPU
+device_ids = [0]#,1,2]                # GPU ids. Set to [0] for single GPU
 
 log10_lr = -4.0                     # Log learning rate
 lr = 10**log10_lr

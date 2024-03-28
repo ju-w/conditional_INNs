@@ -9,6 +9,12 @@ import data
 import config as c
 import cond_net
 
+import functools
+
+partial = functools.partial
+
+c.colorize
+
 if c.colorize:
     nodes = [InputNode(3, *c.img_dims, name='inp')]
 else:
@@ -22,28 +28,31 @@ else:
     cond_node = ConditionNode(cond_size)
 
 if c.colorize:
-    for i in range(c.n_blocks_conv):
-        nodes.append(Node([nodes[-1].out0], permute_layer, {'seed':i}, name=F'permute_{i}'))
-        nodes.append(Node([nodes[-1].out0], glow_coupling_layer, {'clamp':c.clamping, 'F_class':F_fully_conv,
-                                                              'F_args':{'kernel_size':1, 'channels_hidden':c.internal_width_conv}},
+    for i in range(c.col_n_blocks_conv):
+        nodes.append(Node([nodes[-1].out0], PermuteRandom, {'seed':i}, name=F'permute_{i}'))
+        nodes.append(Node([nodes[-1].out0], GLOWCouplingBlock, {'clamp':c.col_clamping, 'subnet_constructor':partial(F_fully_conv,
+                                                              kernel_size=1, channels_hidden=c.col_internal_width_conv)
+                                                              },
                                                               conditions=cond_node, name=F'conv_{i}'))
 
 
-    nodes.append(Node([nodes[-1].out0], flattening_layer, {}, name='flatten'))
+    nodes.append(Node([nodes[-1].out0], Flatten, {}, name='flatten'))
 
-    for i in range(c.n_blocks):
-        nodes.append(Node([nodes[-1].out0], permute_layer, {'seed':i}, name=F'permute_{i}'))
-        nodes.append(Node([nodes[-1].out0], glow_coupling_layer, {'clamp':c.clamping,
-                                                                  'F_class':F_fully_shallow,
-                                                                  'F_args':{'dropout':c.fc_dropout, 'internal_size':c.internal_width}},
+    for i in range(c.col_n_blocks):
+        nodes.append(Node([nodes[-1].out0], PermuteRandom, {'seed':i}, name=F'permute_{i}'))
+        nodes.append(Node([nodes[-1].out0], GLOWCouplingBlock, {'clamp':c.col_clamping,
+                                                                  'subnet_constructor':partial(F_fully_shallow,
+                                                                  dropout=c.fc_dropout, internal_size=c.col_internal_width)
+                                                                  },
                                                               name=F'fc_{i}'))
 
 else:
-    nodes.append(Node([nodes[-1].out0], flattening_layer, {}, name='flatten'))
-    for i in range(c.n_blocks):
-        nodes.append(Node([nodes[-1].out0], permute_layer, {'seed':i}, name=F'permute_{i}'))
-        nodes.append(Node([nodes[-1].out0], glow_coupling_layer, {'clamp':c.clamping,'F_class':F_fully_connected,
-                                                              'F_args':{'dropout':c.fc_dropout, 'internal_size':c.internal_width}},
+    nodes.append(Node([nodes[-1].out0], Flatten, {}, name='flatten'))
+    for i in range(c.cond_n_blocks):
+        nodes.append(Node([nodes[-1].out0], PermuteRandom, {'seed':i}, name=F'permute_{i}'))
+        nodes.append(Node([nodes[-1].out0], GLOWCouplingBlock, {'clamp':c.cond_clamping,'subnet_constructor':partial(F_fully_connected,
+                                                              dropout=c.fc_dropout, internal_size=c.cond_internal_width)
+                                                              },
                                                               conditions=cond_node,
                                                               name=F'fc_{i}'))
 
@@ -85,10 +94,10 @@ def load(name):
 model = ReversibleGraphNet(nodes, verbose=False)
 model.cuda()
 init_model(model)
+model.to('cpu')
 
 params_trainable = list(filter(lambda p: p.requires_grad, model.parameters()))
 
 gamma = (c.decay_by)**(1./c.n_epochs)
 optim = torch.optim.Adam(params_trainable, lr=c.lr, betas=c.betas, eps=1e-6, weight_decay=c.weight_decay)
 weight_scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=1, gamma=gamma)
-

@@ -11,6 +11,10 @@ from subnet_coupling import *
 import data
 import config as c
 
+from functools import partial
+
+from extra_modules import *
+
 feature_channels = 256
 fc_cond_length = 512
 n_blocks_fc = 8
@@ -81,37 +85,38 @@ def _add_conditioned_section(nodes, depth, channels_in, channels, cond_level):
                               #{'clamp':c.clamping, 'subnet':cond_subnet(cond_level, channels_in, (cond_level==0))},
                               #conditions=[conditions[0]], name=F'cbn_{k}'))
 
-            nodes.append(Node([nodes[-1].out0], conv_1x1, {'M':random_orthog(channels_in)}))
+            nodes.append(Node([nodes[-1].out0], Fixed1x1Conv, {'M':random_orthog(channels_in)}))
 
 
 def _add_split_downsample(nodes, split, downsample, channels_in, channels):
     if downsample=='haar':
-        nodes.append(Node([nodes[-1].out0], haar_multiplex_layer, {'rebalance':0.5, 'order_by_wavelet':True}, name='haar'))
+        nodes.append(Node([nodes[-1].out0], HaarDownsampling, {'rebalance':0.5, 'order_by_wavelet':True}, name='haar'))
     if downsample=='reshape':
-        nodes.append(Node([nodes[-1].out0], i_revnet_downsampling, {}, name='reshape'))
+        nodes.append(Node([nodes[-1].out0], IRevNetDownsampling, {}, name='reshape'))
 
     for i in range(2):
-        nodes.append(Node([nodes[-1].out0], conv_1x1, {'M':random_orthog(channels_in*4)}))
+        nodes.append(Node([nodes[-1].out0], Fixed1x1Conv, {'M':random_orthog(channels_in*4)}))
         nodes.append(Node([nodes[-1].out0],
-                      glow_coupling_layer,
-                      {'clamp':c.clamping, 'F_class':F_conv,
-                       'F_args':{'kernel_size':1, 'leaky_slope': 1e-2, 'channels_hidden':channels}},
+                      GLOWCouplingBlock,
+                      {'clamp':c.clamping, 'subnet_constructor':F_conv,
+                    #    'F_args':{'kernel_size':1, 'leaky_slope': 1e-2, 'channels_hidden':channels}
+                       },
                       conditions=[]))
 
     if split:
-        nodes.append(Node([nodes[-1].out0], split_layer,
-                        {'split_size_or_sections': split, 'dim':0}, name='split'))
+        nodes.append(Node([nodes[-1].out0], Split,
+                        {'section_sizes': split, 'dim':0}, name='split'))
 
-        output = Node([nodes[-1].out1], flattening_layer, {}, name='flatten')
+        output = Node([nodes[-1].out1], Flatten, {}, name='flatten')
         nodes.insert(-2, output)
         nodes.insert(-2, OutputNode([output.out0], name='out'))
 
 def _add_fc_section(nodes):
-    nodes.append(Node([nodes[-1].out0], flattening_layer, {}, name='flatten'))
+    nodes.append(Node([nodes[-1].out0], Flatten, {}, name='flatten'))
     for k in range(n_blocks_fc):
-        nodes.append(Node([nodes[-1].out0], permute_layer, {'seed':k}, name=F'permute_{k}'))
-        nodes.append(Node([nodes[-1].out0], glow_coupling_layer,
-                {'clamp':c.clamping, 'F_class':F_fully_connected, 'F_args':{'internal_size':512}},
+        nodes.append(Node([nodes[-1].out0], PermuteRandom, {'seed':k}, name=F'permute_{k}'))
+        nodes.append(Node([nodes[-1].out0], GLOWCouplingBlock,
+                {'clamp':c.clamping, 'subnet_constructor':partial(F_fully_connected, internal_size=512)},
                 conditions=[conditions[1]], name=F'fc_{k}'))
 
     nodes.append(OutputNode([nodes[-1].out0], name='out'))
@@ -140,7 +145,7 @@ def init_model(mod):
     for key, param in mod.named_parameters():
         split = key.split('.')
         if param.requires_grad:
-            param.data = c.init_scale * torch.randn(param.data.shape).cuda()
+            param.data = c.init_scale * torch.randn(param.data.shape)
             if len(split) > 3 and split[3][-1] == '3': # last convolution in the coeff func
                 param.data.fill_(0.)
 
@@ -151,7 +156,7 @@ for o in nodes:
     if type(o) is OutputNode:
         output_dimensions.append(o.input_dims[0][0])
 
-cinn.cuda()
+# cinn.cuda()
 init_model(cinn)
 #init_model(fc_cond_net)
 
@@ -168,21 +173,21 @@ try:
 except FileNotFoundError:
     warnings.warn("No loading pretrained weights for conditioning network (./features_pretrained.pt)")
 
-efros_net.cuda()
+# efros_net.cuda()
 efros_net.class8_ab.state_dict()['weight'].copy_(torch.from_numpy(np.load('./pts_in_hull.npy').T).view(2, 313, 1, 1))
 
 def prepare_batch(x):
 
-    net_feat = combined_model.module.feature_network
-    net_inn  = combined_model.module.inn
-    net_cond = combined_model.module.fc_cond_network
+    net_feat = combined_model.feature_network
+    net_inn  = combined_model.inn
+    net_cond = combined_model.fc_cond_network
 
     with torch.no_grad():
-        x = x.cuda()
+        # x = x.cuda()
         x_l, x_ab = x[:, 0:1], x[:, 1:]
 
         x_ab = F.interpolate(x_ab, size=c.img_dims)
-        x_ab += 5e-2 * torch.cuda.FloatTensor(x_ab.shape).normal_()
+        x_ab += 5e-2 * torch.FloatTensor(x_ab.shape).normal_()
 
     if c.end_to_end:
         features = net_feat.features(x_l * data.scales[0] + data.offsets[0] - 50)
@@ -197,8 +202,8 @@ def prepare_batch(x):
         for i in [0,1]:
             ab_pred[:, i] = (ab_pred[:, i] - data.offsets[i+1]) / data.scales[i+1]
 
-        ab_pred += 5e-2 * torch.cuda.FloatTensor(ab_pred.shape).normal_()
-        ab_pred += 0.10 * torch.randn(ab_pred.shape[0], 2, 1, 1).cuda().expand_as(ab_pred)
+        ab_pred += 5e-2 * torch.FloatTensor(ab_pred.shape).normal_()
+        ab_pred += 0.10 * torch.randn(ab_pred.shape[0], 2, 1, 1).expand_as(ab_pred)
         ab_pred *= 0.95 + 0.18 * np.random.randn()
 
     cond = [features, net_cond(features).squeeze()]
@@ -218,7 +223,7 @@ class WrappedModel(nn.Module):
         x_l, x_ab = x[:, 0:1], x[:, 1:]
 
         x_ab = F.interpolate(x_ab, size=c.img_dims)
-        x_ab += 5e-2 * torch.cuda.FloatTensor(x_ab.shape).normal_()
+        x_ab += 5e-2 * torch.FloatTensor(x_ab.shape).normal_()
 
         if c.end_to_end:
             features = self.feature_network.features(x_l * data.scales[0] + data.offsets[0] - 50)
@@ -230,9 +235,9 @@ class WrappedModel(nn.Module):
 
         cond = [features, self.fc_cond_network(features).squeeze()]
 
-        z = self.inn(x_ab, cond)
+        z, jac = self.inn(x_ab, cond)
         zz = sum(torch.sum(o**2, dim=1) for o in z)
-        jac = self.inn.jacobian(run_forward=False)
+        # jac = self.inn.jacobian(run_forward=False)
 
         return zz, jac
 
@@ -240,11 +245,13 @@ class WrappedModel(nn.Module):
         return self.inn(z, cond, rev=True)
 
 combined_model = WrappedModel(efros_net, fc_cond_net, cinn)
-combined_model.cuda()
-combined_model = nn.DataParallel(combined_model, device_ids=c.device_ids)
+# combined_model.cuda()
+# combined_model = nn.DataParallel(combined_model, device_ids=c.device_ids)
+combined_model.to('cpu')
 
-params_trainable = (list(filter(lambda p: p.requires_grad, combined_model.module.inn.parameters()))
-                  + list(combined_model.module.fc_cond_network.parameters()))
+
+params_trainable = (list(filter(lambda p: p.requires_grad, combined_model.inn.parameters()))
+                  + list(combined_model.fc_cond_network.parameters()))
 
 optim = torch.optim.Adam(params_trainable, lr=c.lr, betas=c.betas, eps=1e-6, weight_decay=c.weight_decay)
 #optim = torch.optim.SGD(params_trainable, lr=c.lr, weight_decay=c.weight_decay)
@@ -279,7 +286,7 @@ class DummyOptim:
 efros_net.train()
 
 if c.end_to_end:
-    feature_optim = torch.optim.Adam(combined_model.module.feature_network.parameters(), lr=c.lr_feature_net, betas=c.betas, eps=1e-4)
+    feature_optim = torch.optim.Adam(combined_model.feature_network.parameters(), lr=c.lr_feature_net, betas=c.betas, eps=1e-4)
     feature_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(feature_optim,
                                                             factor=sched_factor,
                                                             patience=sched_patience,

@@ -2,9 +2,11 @@ from math import exp
 import torch
 import torch.nn as nn
 
-class subnet_coupling_layer(nn.Module):
+from FrEIA.modules import InvertibleModule
+
+class subnet_coupling_layer(InvertibleModule):
     def __init__(self, dims_in, dims_c, F_class, subnet, sub_len, F_args={}, clamp=5.):
-        super().__init__()
+        super().__init__(dims_in, dims_c)
 
         channels = dims_in[0][0]
         self.ndims = len(dims_in[0])
@@ -16,11 +18,11 @@ class subnet_coupling_layer(nn.Module):
         self.min_s = exp(-clamp)
 
         self.conditional = True
-        condition_length = sub_len
+        self.condition_length = sub_len
         self.subnet = subnet
 
-        self.s1 = F_class(self.split_len1 + condition_length, self.split_len2*2, **F_args)
-        self.s2 = F_class(self.split_len2 + condition_length, self.split_len1*2, **F_args)
+        self.s1 = F_class(self.split_len1 + self.condition_length, self.split_len2*2, **F_args)
+        self.s2 = F_class(self.split_len2 + self.condition_length, self.split_len1*2, **F_args)
 
     def e(self, s):
         return torch.exp(self.clamp * 0.636 * torch.atan(s / self.clamp))
@@ -28,7 +30,7 @@ class subnet_coupling_layer(nn.Module):
     def log_e(self, s):
         return self.clamp * 0.636 * torch.atan(s / self.clamp)
 
-    def forward(self, x, c=[], rev=False):
+    def forward(self, x, c=[], rev=False, jac=True):
         x1, x2 = (x[0].narrow(1, 0, self.split_len1),
                   x[0].narrow(1, self.split_len1, self.split_len2))
         c_star = self.subnet(torch.cat(c, 1))
@@ -53,10 +55,10 @@ class subnet_coupling_layer(nn.Module):
             y1 = (x1 - t2) / self.e(s2)
             self.last_jac = - self.log_e(s1) - self.log_e(s2)
 
-        return [torch.cat((y1, y2), 1)]
+        return [torch.cat((y1, y2), 1)], torch.sum(self.last_jac, dim=tuple(range(1, self.ndims+1)))
 
-    def jacobian(self, x, c=[], rev=False):
-        return torch.sum(self.last_jac, dim=tuple(range(1, self.ndims+1)))
+    # def jacobian(self, x, c=[], rev=False):
+        # return torch.sum(self.last_jac, dim=tuple(range(1, self.ndims+1)))
 
     def output_dims(self, input_dims):
         return input_dims

@@ -27,7 +27,7 @@ def colorize_test_set(temp=1., postfix=0, img_folder='images'):
             z = temp * torch.randn(Lab.shape[0], model.ndim_total).cuda()
             L, ab = Lab[:, :1], Lab[:, 1:]
 
-            ab_gen = cinn.reverse_sample(z, L)
+            ab_gen, _ = cinn.reverse_sample(z, L)
             rgb_gen = data.norm_lab_to_rgb(L.cpu(), ab_gen.cpu())
 
             for im in rgb_gen:

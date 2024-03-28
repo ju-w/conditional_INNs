@@ -5,15 +5,25 @@ import numpy as np
 
 from FrEIA.framework import *
 from FrEIA.modules import *
-from cbn_layer import *
+# from cbn_layer import *
 from subnet_coupling import *
 import data
 import config as c
+
+from extra_modules import *
+from functools import partial
 
 n_blocks_fc = 8
 outputs = []
 
 conditions = [ConditionNode(1, c.img_dims[0], c.img_dims[1])]
+
+conv_1x1 = Fixed1x1Conv
+i_revnet_downsampling = IRevNetDownsampling
+glow_coupling_layer = GLOWCouplingBlock
+flattening_layer = Flatten
+haar_multiplex_layer = HaarDownsampling
+permute_layer = PermuteRandom
 
 def random_orthog(n):
     w = np.random.randn(n, n)
@@ -49,6 +59,7 @@ class HaarConv(nn.Module):
         return out * self.fac_fwd
 
 def cond_subnet(level):
+    # return nn.Sequential(*[HaarConv(i) for i in range(level)])
     return nn.Sequential(*[HaarConv(i) for i in range(level+2)])
 
 def _add_conditioned_section(nodes, depth, channels_in, channels, cond_level):
@@ -58,6 +69,7 @@ def _add_conditioned_section(nodes, depth, channels_in, channels, cond_level):
                           subnet_coupling_layer,
                           {'clamp':c.clamping, 'F_class':F_conv,
                            'subnet':cond_subnet(cond_level), 'sub_len':4**(cond_level+2),
+                        #    'subnet':cond_subnet(cond_level), 'sub_len':4**(cond_level),
                            'F_args':{'leaky_slope': 5e-2, 'channels_hidden':channels}},
                           conditions=[conditions[0]], name=F'conv_{k}'))
 
@@ -74,13 +86,13 @@ def _add_split_downsample(nodes, split, downsample, channels_in, channels):
         nodes.append(Node([nodes[-1].out0], conv_1x1, {'M':random_orthog(channels_in*4)}))
         nodes.append(Node([nodes[-1].out0],
                       glow_coupling_layer,
-                      {'clamp':c.clamping, 'F_class':F_conv,
-                       'F_args':{'kernel_size':1, 'leaky_slope': 1e-2, 'channels_hidden':channels}},
+                      {'clamp':c.clamping, 'subnet_constructor':partial(F_conv,
+                       kernel_size=1, leaky_slope=1e-2, channels_hidden=channels)},
                       conditions=[]))
 
     if split:
-        nodes.append(Node([nodes[-1].out0], split_layer,
-                        {'split_size_or_sections': split, 'dim':0}, name='split'))
+        nodes.append(Node([nodes[-1].out0], Split,
+                        {'section_sizes': split, 'dim':0}, name='split'))
 
         output = Node([nodes[-1].out1], flattening_layer, {}, name='flatten')
         nodes.insert(-2, output)
@@ -91,7 +103,7 @@ def _add_fc_section(nodes):
     for k in range(n_blocks_fc):
         nodes.append(Node([nodes[-1].out0], permute_layer, {'seed':k}, name=F'permute_{k}'))
         nodes.append(Node([nodes[-1].out0], glow_coupling_layer,
-                {'clamp':c.clamping, 'F_class':F_fully_connected, 'F_args':{'internal_size':512}},
+                {'clamp':c.clamping, 'subnet_constructor':partial(F_fully_connected, internal_size=512)},
                 conditions=[], name=F'fc_{k}'))
 
     nodes.append(OutputNode([nodes[-1].out0], name='out'))
@@ -120,7 +132,7 @@ def init_model(mod):
     for key, param in mod.named_parameters():
         split = key.split('.')
         if param.requires_grad:
-            param.data = c.init_scale * torch.randn(param.data.shape).cuda()
+            param.data = c.init_scale * torch.randn(param.data.shape)
             if len(split) > 3 and split[3][-1] == '3': # last convolution in the coeff func
                 param.data.fill_(0.)
 
@@ -131,7 +143,7 @@ for o in nodes:
     if type(o) is OutputNode:
         output_dimensions.append(o.input_dims[0][0])
 
-cinn.cuda()
+# cinn.cuda()
 init_model(cinn)
 
 if c.load_inn_only:
@@ -156,11 +168,11 @@ def prepare_batch(x):
     net_cond = combined_model.module.fc_cond_network
 
     with torch.no_grad():
-        x = x.cuda()
+        # x = x.cuda()
         x_l, x_ab = x[:, 0:1], x[:, 1:]
 
         x_ab = F.interpolate(x_ab, size=c.img_dims)
-        x_ab += 5e-2 * torch.cuda.FloatTensor(x_ab.shape).normal_()
+        x_ab += 5e-2 * torch.FloatTensor(x_ab.shape).normal_()
 
         cond = [x_l]
         ab_pred = None
@@ -180,13 +192,13 @@ class WrappedModel(nn.Module):
         x_l, x_ab = x[:, 0:1], x[:, 1:]
 
         x_ab = F.interpolate(x_ab, size=c.img_dims)
-        x_ab += 5e-2 * torch.cuda.FloatTensor(x_ab.shape).normal_()
+        x_ab += 5e-2 * torch.FloatTensor(x_ab.shape).normal_()
 
         cond = [x_l]
 
-        z = self.inn(x_ab, cond)
+        z, jac = self.inn(x_ab, cond)
         zz = sum(torch.sum(o**2, dim=1) for o in z)
-        jac = self.inn.jacobian(run_forward=False)
+        # jac = self.inn.jacobian(run_forward=False)
 
         return zz, jac
 
@@ -194,10 +206,12 @@ class WrappedModel(nn.Module):
         return self.inn(z, cond, rev=True)
 
 combined_model = WrappedModel(efros_net, None, cinn)
-combined_model.cuda()
-combined_model = nn.DataParallel(combined_model, device_ids=c.device_ids)
+# combined_model.cuda()
+# combined_model = nn.DataParallel(combined_model, device_ids=c.device_ids)
+combined_model.to('cpu')
 
-params_trainable = list(filter(lambda p: p.requires_grad, combined_model.module.inn.parameters()))
+
+params_trainable = list(filter(lambda p: p.requires_grad, combined_model.inn.parameters()))
 
 optim = torch.optim.Adam(params_trainable, lr=c.lr, betas=c.betas, eps=1e-6, weight_decay=c.weight_decay)
 
@@ -214,7 +228,7 @@ weight_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim,
                                                             cooldown=sched_cooldown,
                                                             verbose = True)
 
-weight_scheduler_fixed = torch.optim.lr_scheduler.torch.optim.lr_scheduler.StepLR(optim, 120, gamma=0.2)
+weight_scheduler_fixed = torch.optim.lr_scheduler.StepLR(optim, 120, gamma=0.2)
 
 class DummyOptim:
     def __init__(self):
@@ -231,7 +245,7 @@ class DummyOptim:
 efros_net.train()
 
 if c.end_to_end:
-    feature_optim = torch.optim.Adam(combined_model.module.feature_network.parameters(), lr=c.lr_feature_net, betas=c.betas, eps=1e-4)
+    feature_optim = torch.optim.Adam(combined_model.feature_network.parameters(), lr=c.lr_feature_net, betas=c.betas, eps=1e-4)
     feature_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(feature_optim,
                                                             factor=sched_factor,
                                                             patience=sched_patience,
